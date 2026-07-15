@@ -1,155 +1,197 @@
-// ========== 豆包 iOS 语音输入高精确特征检测器 ==========
+/**
+ * Doubao Voice Observer
+ * High-precision iOS dictation detector specifically for Doubao (豆包) input method rewriting feature.
+ * Based on strict Finite State Machine (FSM).
+ */
+
+const FSM = {
+    IDLE: 'IDLE',
+    DELETING: 'DELETING',
+    WAIT_ZERO: 'WAIT_ZERO',
+    INJECTING: 'INJECTING',
+    SILENT_VERIFYING: 'SILENT_VERIFYING'
+};
+
 class DoubaoVoiceObserver {
-    // 将事件名导出为静态常量，方便用户引用，避免硬编码拼错
     static get EVENT_COMPLETE() {
         return 'doubao:voice:complete';
     }
 
-    constructor(element, options = {}) {
+    constructor(element, debug = false) {
         this.element = element;
-        this.options = Object.assign({
-            minFinalizeLength: 2,
-            onComplete: null,
-        }, options);
+        this.debug = debug;
 
-        this.state = 'IDLE';
-        this.baselineLength = 0;
-        this.deleteCount = 0;
-        this.insertedText = '';
+        this.state = FSM.IDLE;
+        this.expectedText = "";
+        this.timer = null;
 
-        this._handlers = {
-            keydown: this._handleKeyDown.bind(this),
-            input: this._handleInput.bind(this),
-            keyup: this._handleKeyUp.bind(this),
-            selectionchange: this._handleSelectionChange.bind(this)
-        };
-        // 🆕 如果用户传了 onComplete，自动帮他把事件挂上
-        if (this.options.onComplete) {
-            // 注意这里绑定了 this，方便销毁时移除
-            this._completeHandler = (e) => {
-                this.options.onComplete(e.detail.text, e);
-            };
-            this.element.addEventListener(
-                DoubaoVoiceObserver.EVENT_COMPLETE,
-                this._completeHandler
-            );
-        }
+        this._handleEvent = this._handleEvent.bind(this);
         this.init();
     }
 
     init() {
-        this.element.addEventListener('keydown', this._handlers.keydown);
-        this.element.addEventListener('input', this._handlers.input);
-        this.element.addEventListener('keyup', this._handlers.keyup);
-        document.addEventListener('selectionchange', this._handlers.selectionchange);
-    }
-
-    _reset() {
-        this.state = 'IDLE';
-        this.baselineLength = 0;
-        this.deleteCount = 0;
-        this.insertedText = '';
-    }
-
-    _handleKeyDown(e) {
-        if (e.key === 'Backspace') {
-            this.state = 'DELETING';
-            this.baselineLength = this.element.value.length;
-            this.deleteCount = 0;
-        } else if (this.state === 'ZERO_WAIT' && e.key && e.key.length > 1) {
-            this.state = 'INSERTING';
-            this.insertedText = e.key;
-        } else {
-            this._reset();
-        }
-    }
-
-    _handleInput(e) {
-        if (this.state === 'DELETING' && e.inputType === 'deleteContentBackward') {
-            this.deleteCount++;
-        }
-    }
-
-    _handleKeyUp(e) {
-        if (e.key === 'Backspace') {
-            if (this.state === 'DELETING') {
-                const isMatched = (this.deleteCount === this.baselineLength);
-                const isOverMin = (this.baselineLength >= this.options.minFinalizeLength);
-
-                if (isMatched && isOverMin) {
-                    this.state = 'ZERO_WAIT';
-                } else {
-                    this._reset();
-                }
-            }
-        } else if (this.state === 'INSERTING' && e.key === this.insertedText) {
-            const normValue = this.element.value.replace(/\r\n/g, '\n');
-            const normInserted = this.insertedText.replace(/\r\n/g, '\n');
-
-            if (normValue === normInserted) {
-                this._dispatchComplete(this.insertedText);
-            }
-            this._reset();
-        }
-    }
-
-    _handleSelectionChange() {
-        if (document.activeElement !== this.element) return;
-        if (this.state === 'ZERO_WAIT' && this.element.value.length === 0) {
-            // 静默等待重写 KeyDown 触发
-        }
-    }
-
-    _dispatchComplete(finalText) {
-        const event = new CustomEvent(DoubaoVoiceObserver.EVENT_COMPLETE, {
-            bubbles: true,
-            cancelable: true,
-            detail: {
-                text: finalText
-            }
-        });
-        this.element.dispatchEvent(event);
+        const events = ['keydown', 'keyup', 'beforeinput', 'input', 'blur', 'focus'];
+        events.forEach(ev => this.element.addEventListener(ev, this._handleEvent));
+        document.addEventListener('selectionchange', this._handleEvent);
     }
 
     destroy() {
-        this.element.removeEventListener('keydown', this._handlers.keydown);
-        this.element.removeEventListener('input', this._handlers.input);
-        this.element.removeEventListener('keyup', this._handlers.keyup);
-        document.removeEventListener('selectionchange', this._handlers.selectionchange);
-        if (this._completeHandler) {
-            this.element.removeEventListener(
-                DoubaoVoiceObserver.EVENT_COMPLETE,
-                this._completeHandler
-            );
+        const events = ['keydown', 'keyup', 'beforeinput', 'input', 'blur', 'focus'];
+        events.forEach(ev => this.element.removeEventListener(ev, this._handleEvent));
+        document.removeEventListener('selectionchange', this._handleEvent);
+        this._reset();
+    }
+
+    _log(msg, ...args) {
+        if (this.debug) console.log(`[DoubaoFSM | ${this.state}] ${msg}`, ...args);
+    }
+
+    _reset() {
+        if (this.state !== FSM.IDLE) {
+            this.state = FSM.IDLE;
+            this.expectedText = "";
+            if (this.timer) {
+                clearTimeout(this.timer);
+                this.timer = null;
+            }
         }
     }
-    static listen(element, onComplete, options = {}) {
-        // 1. 创建实例（注意不要把 onComplete 传给构造函数，避免重复绑定）
-        const instance = new DoubaoVoiceObserver(element, {
-            ...options,
-            onComplete: null // 强制清空，防止构造函数再绑一次
-        });
 
-        // 2. 我们自己管理事件监听
+    _isControlKey(key) {
+        return ['Backspace', 'Enter', 'Tab', 'Escape', 'Shift', 'Control', 'Alt', 'Meta'].includes(key);
+    }
+
+    _normalizeText(text) {
+        return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+    }
+
+    _dispatch(reason, text) {
+        this._log(`🎯 Successfully triggered! Reason: ${reason}`);
+        this.element.dispatchEvent(new CustomEvent(DoubaoVoiceObserver.EVENT_COMPLETE, {
+            bubbles: true,
+            detail: { text, reason }
+        }));
+        this._reset();
+    }
+
+    _handleEvent(e) {
+        // ========== 1. Fallback & Global Interruptions ==========
+        if (e.type === 'blur') {
+            const text = this.element.value.trim();
+            if (text.length > 0) {
+                this._dispatch('blur_fallback', text);
+            } else {
+                this._reset();
+            }
+            return;
+        }
+
+        if (e.type === 'focus') {
+            this._reset();
+            return;
+        }
+
+        // ========== 2. Silent Verification Interruption ==========
+        if (this.state === FSM.SILENT_VERIFYING) {
+            if (['keydown', 'input', 'beforeinput'].includes(e.type)) {
+                this._log(`❌ Verification interrupted: Manual intervention within 500ms (${e.type})`);
+                this._reset();
+            }
+            return; 
+        }
+
+        // ========== 3. Core Strict One-Way FSM ==========
+        switch (this.state) {
+            case FSM.IDLE:
+                // Start FSM: Must press Backspace when text exists
+                if (e.type === 'keydown' && e.key === 'Backspace' && this.element.value.length > 0) {
+                    this.state = FSM.DELETING;
+                    this._log("Feature matching started: Entering continuous backspace");
+                }
+                break;
+
+            case FSM.DELETING:
+                if (['beforeinput', 'input'].includes(e.type) && e.inputType === 'deleteContentBackward') {
+                    // Valid deletion, keep state
+                } else if (e.type === 'selectionchange') {
+                    // Ignore cursor jitter
+                } else if (e.type === 'keyup' && e.key === 'Backspace') {
+                    this.state = FSM.WAIT_ZERO;
+                    this._log("Backspace keyup: Waiting for length to reach 0");
+                } else {
+                    this._reset(); // Interrupted by impurity event
+                }
+                break;
+
+            case FSM.WAIT_ZERO:
+                if (e.type === 'selectionchange' && this.element.value.length === 0) {
+                    // Strict condition: Textbox MUST be completely cleared
+                    this.state = FSM.INJECTING; 
+                    this._log("✅ Zero length verified: Waiting for long text injection");
+                } else if (e.type === 'keydown' && e.key.length > 1 && !this._isControlKey(e.key) && this.element.value.length === 0) {
+                    // Fault tolerance: If selectionchange is skipped by OS, proceed if length is 0
+                    this.expectedText = e.key;
+                    this.state = FSM.INJECTING;
+                    this._log(`Long text Key received: length ${e.key.length}`);
+                } else {
+                    this._reset();
+                }
+                break;
+
+            case FSM.INJECTING:
+                if (e.type === 'keydown' && e.key.length > 1 && !this._isControlKey(e.key)) {
+                    this.expectedText = e.key; 
+                } else if (['beforeinput', 'input'].includes(e.type) && ['insertText', 'insertParagraph'].includes(e.inputType)) {
+                    // Valid insertion
+                } else if (e.type === 'selectionchange') {
+                    // Ignore cursor jitter
+                } else if (e.type === 'keyup') {
+                    const normExpected = this._normalizeText(this.expectedText);
+                    const normCurrent = this._normalizeText(this.element.value);
+                    
+                    // Double check: keyup text, expected text, and actual input value must highly match
+                    if (e.key === this.expectedText && normExpected === normCurrent) {
+                        this.state = FSM.SILENT_VERIFYING;
+                        this._log("✅ Injection verified: Starting 500ms silent countdown");
+                        
+                        this.timer = setTimeout(() => {
+                            this._dispatch('fsm_match', normCurrent);
+                        }, 500);
+                    } else {
+                        this._log("❌ Injection verification failed: Text mismatch");
+                        this._reset();
+                    }
+                } else {
+                    this._reset();
+                }
+                break;
+        }
+    }
+
+    /**
+     * Factory method for easy usage
+     */
+    static listen(element, onComplete, debug = false) {
+        const instance = new DoubaoVoiceObserver(element, debug);
+        
         const handler = (e) => {
-            onComplete(e.detail.text, e);
+            onComplete(e.detail.text, e.detail.reason);
         };
         element.addEventListener(DoubaoVoiceObserver.EVENT_COMPLETE, handler);
 
-        // 3. 返回一个“超级控制器”
         return {
-            // 用户只需调用 destroy，即可清理所有资源
             destroy: () => {
                 element.removeEventListener(DoubaoVoiceObserver.EVENT_COMPLETE, handler);
                 instance.destroy();
             },
-            // 如果用户需要访问原始实例做高级操作（比如动态改配置），也暴露出来
-            instance: instance
+            instance
         };
     }
 }
 
-// 支持 CommonJS 和 ES Module
+// Support CommonJS & ES Module
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = DoubaoVoiceObserver;
+} else {
+    window.DoubaoVoiceObserver = DoubaoVoiceObserver;
 }

@@ -1,7 +1,7 @@
 {
   "name": "doubao-voice-observer",
-  "version": "1.0.0",
-  "description": "High-precision iOS dictation detector specifically for Doubao (豆包) input method rewriting feature.",
+  "version": "1.0.1",
+  "description": "High-precision iOS dictation detector based on Finite State Machine (FSM) specifically for Doubao (豆包) input method.",
   "main": "src/index.js",
   "scripts": {
     "test": "echo \"No test specified\" && exit 0"
@@ -10,8 +10,20 @@
     "type": "git",
     "url": "git+https://github.com/franj/doubao-voice-observer.git"
   },
-  "keywords": ["doubao", "ios", "dictation", "voice", "input", "observer"],
-  "author": "你的名字",
+  "keywords": [
+    "doubao",
+    "ios",
+    "dictation",
+    "voice",
+    "voice-input",
+    "input-method",
+    "observer",
+    "fsm",
+    "auto-send",
+    "safari",
+    "webkit"
+  ],
+  "author": "franj",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/franj/doubao-voice-observer/issues"
