@@ -31,6 +31,8 @@ class DoubaoVoiceObserver {
         const gapCfg = options.keyupDeleteGap || {};
         this.keyupDeleteGapMin = gapCfg.min || 0;
         this.keyupDeleteGapMax = gapCfg.max || 0;
+        // 【新增】只有输入框内容不超过此长度时，才应用忽略逻辑；0/不设=禁用此检查
+        this.keyupDeleteGapMaxLen = gapCfg.maxTextLength || 0;
         // 记录最近一次单字符输入的时间戳（仅在 IDLE 状态更新）
         this.lastKeyupTime = 0;
 
@@ -138,13 +140,17 @@ class DoubaoVoiceObserver {
             case FSM.IDLE:
                 // 【修改】只有在输入框非逻辑为空时，退格才算作删除流程的开始
                 if (e.type === 'keydown' && e.key === 'Backspace' && !this._isLogicalZero(this.element.value)) {
-                    // 如果配置了区间且距离上次单字符输入落在特征区间内，则判定为内部修正，忽略本次退格
-                    const now = Date.now();
-                    const gap = now - this.lastKeyupTime;
-                    if (this.keyupDeleteGapMin > 0 && this.keyupDeleteGapMax > 0 && this.lastKeyupTime > 0
-                        && gap >= this.keyupDeleteGapMin && gap <= this.keyupDeleteGapMax) {
-                        this._log(`⏳ Backspace ignored: gap matches internal-correction signature (${this.keyupDeleteGapMin}ms ≤ ${gap}ms ≤ ${this.keyupDeleteGapMax}ms)`);
-                        break;  // 不进入删除状态
+                    const currentText = this.element.value;
+                    // 条件 C：若设置了 maxTextLength 且内容长度已超限，则不应用任何忽略逻辑，直接进入删除检测
+                    const skipFilterByLen = this.keyupDeleteGapMaxLen > 0 && currentText.length > this.keyupDeleteGapMaxLen;
+                    if (!skipFilterByLen) {
+                        const now = Date.now();
+                        const gap = now - this.lastKeyupTime;
+                        if (this.keyupDeleteGapMin > 0 && this.keyupDeleteGapMax > 0 && this.lastKeyupTime > 0
+                            && gap >= this.keyupDeleteGapMin && gap <= this.keyupDeleteGapMax) {
+                            this._log(`⏳ Backspace ignored: A∩B∩C passed (len=${currentText.length}≤${this.keyupDeleteGapMaxLen || '∞'}, gap=${gap}ms ∈ [${this.keyupDeleteGapMin},${this.keyupDeleteGapMax}])`);
+                            break;  // 不进入删除状态
+                        }
                     }
                     this.state = FSM.DELETING;
                     this._log("Feature matching started: Entering continuous backspace");
