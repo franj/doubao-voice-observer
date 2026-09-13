@@ -1,8 +1,13 @@
 {
   "name": "doubao-voice-observer",
   "version": "1.0.2",
-  "description": "High-precision iOS dictation detector based on Finite State Machine (FSM) specifically for Doubao (豆包) input method.",
+  "description": "Deterministic iOS dictation completion detector based on a Finite State Machine (FSM) for the Doubao (豆包) input method. Supports multi-round AI refinement with an adaptive verification window.",
   "main": "src/index.js",
+  "files": [
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "echo \"No test specified\" && exit 0"
   },
